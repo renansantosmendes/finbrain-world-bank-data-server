@@ -1,83 +1,119 @@
 # FinBrain World Bank Data Server
 
-API HTTP sem estado sobre os dados abertos do **Banco Mundial**, construída com a
-biblioteca [`wbdata`](https://github.com/OliverSherouse/wbdata) e FastAPI. Cada
-requisição é respondida pela API do Banco Mundial no momento da chamada. O
-servidor **não usa cache** e não grava nada em disco, o que permite rodar como
-função serverless na Vercel.
+A stateless HTTP API over the **World Bank** open data, built with the
+[`wbdata`](https://github.com/OliverSherouse/wbdata) library and FastAPI. Every
+request is answered by the World Bank API at the moment of the call. The server
+**does not use a cache** and does not write anything to disk, which makes it
+possible to run it as a serverless function on Vercel.
 
-A documentação completa, em inglês, fica no Swagger: `/docs` (ou `/redoc`).
+The full documentation, in English, is in Swagger at `/docs` (or `/redoc`).
 
-## Rotas
+## Contents
 
-| Método | Rota | O que faz |
+- [Routes](#routes)
+- [Errors](#errors)
+- [Architecture](#architecture)
+- [Why there is no cache](#why-there-is-no-cache)
+- [Configuration](#configuration)
+- [Running locally](#running-locally)
+- [Testing](#testing)
+- [Deployment on Vercel](#deployment-on-vercel)
+- [Data](#data)
+
+## Routes
+
+| Method | Route | What it does |
 |---|---|---|
-| GET | `/health` | Verificação de vida do processo (não consulta o Banco Mundial) |
-| GET | `/version` | Versão do servidor e do `wbdata` |
-| GET | `/sources` | Fontes de dados (WDI, Doing Business, ...) |
-| GET | `/sources/{source_id}` | Uma fonte pelo id |
-| GET | `/topics` | Tópicos temáticos |
-| GET | `/topics/{topic_id}` | Um tópico pelo id |
-| GET | `/countries` | Países e agregados, com filtros `country_id`, `query`, `incomelevel`, `lendingtype` |
-| GET | `/countries/{country_id}` | Um país ou agregado pelo código ISO3 |
-| GET | `/income-levels` | Grupos de renda |
-| GET | `/lending-types` | Tipos de empréstimo (IBRD, IDA, blend) |
-| GET | `/indicators` | Busca de indicadores por código, nome, fonte ou tópico |
-| GET | `/indicators/{code}` | Metadados de um indicador |
-| GET | `/data/{code}` | Observações de um indicador (lista de registros) |
-| GET | `/series/{code}` | Série temporal de um indicador para um país (`date`/`value`) |
-| POST | `/data/table` | Vários indicadores em uma tabela (um registro por período) |
+| GET | `/health` | Liveness check of the process (does not query the World Bank) |
+| GET | `/version` | Version of the server and of `wbdata` |
+| GET | `/sources` | Data sources (WDI, Doing Business, ...) |
+| GET | `/sources/{source_id}` | One source by id |
+| GET | `/topics` | Thematic topics |
+| GET | `/topics/{topic_id}` | One topic by id |
+| GET | `/countries` | Countries and aggregates, with the filters `country_id`, `query`, `incomelevel` and `lendingtype` |
+| GET | `/countries/{country_id}` | One country or aggregate by its ISO3 code |
+| GET | `/income-levels` | Income groups |
+| GET | `/lending-types` | Lending types (IBRD, IDA, blend) |
+| GET | `/indicators` | Indicator search by code, name, source or topic |
+| GET | `/indicators/{code}` | Metadata of one indicator |
+| GET | `/data/{code}` | Observations of one indicator (list of records) |
+| GET | `/series/{code}` | Time series of one indicator for one country (`date`/`value`) |
+| POST | `/data/table` | Several indicators in one table (one record per period) |
 
-## Erros
+## Errors
 
-Todas as respostas de erro têm o mesmo corpo, `{"code": "...", "message": "..."}`:
+Every error response has the same body, `{"code": "...", "message": "..."}`:
 
-| Status | Código | Quando |
+| Status | Code | When |
 |---|---|---|
-| 400 | `invalid_request` | Parâmetro inválido (frequência, período sem início, filtro recusado pela API) |
-| 404 | `not_found` | Nada corresponde à requisição, ou o id/código não existe, ou não há dados para a frequência pedida |
-| 502 | `upstream_unavailable` | A API do Banco Mundial não respondeu |
+| 400 | `invalid_request` | Invalid parameter (frequency, period without a start, filter rejected by the API) |
+| 404 | `not_found` | Nothing matches the request, the id or code does not exist, or there is no data for the requested frequency |
+| 502 | `upstream_unavailable` | The World Bank API did not answer |
 
-## Arquitetura
+## Architecture
 
+```mermaid
+flowchart TB
+    client["HTTP client"]
+    vercel["Vercel function<br/>api/index.py"]
+    subgraph app["world_bank_api"]
+        routers["routers/<br/>thin routes: system, catalogue,<br/>indicators, data"]
+        service["service.py<br/>validation, normalization, 404"]
+        gateway["gateway.py<br/>the only module that calls wbdata"]
+        cache["UncachedClient + NoCache<br/>nothing is stored"]
+    end
+    wb["World Bank API"]
+
+    client --> vercel --> routers
+    routers -->|"dependencies.py injects"| service
+    service --> gateway --> cache --> wb
 ```
-world_bank_api/
-├── __init__.py      # move o cache do wbdata para o diretório temporário (antes de qualquer import)
-├── config.py        # título, versão, descrição do Swagger e tags
-├── errors.py        # erros da aplicação e o status HTTP de cada um
-├── gateway.py       # ÚNICO módulo que chama o wbdata; cliente sem cache
-├── service.py       # regras de negócio: validação, normalização, 404
-├── schemas.py       # modelos de resposta (documentam o Swagger)
-├── dependencies.py  # como as rotas recebem o serviço (substituível nos testes)
-├── main.py          # fábrica da aplicação, tratamento de erros, OpenAPI
-└── routers/         # rotas finas: system, catalogue, indicators, data
-api/index.py         # entrada do Vercel
-tests/               # testes unitários de todas as rotas e de todas as camadas
+
+Each layer only knows the layer below it: the routes call the service, the
+service calls the gateway, and only the gateway knows `wbdata`. This is why the
+route tests use a fake gateway and make no network calls.
+
+| Module | Responsibility |
+|---|---|
+| `__init__.py` | Moves the `wbdata` cache to the temporary directory, before any import |
+| `config.py` | Title, version, Swagger description and tags |
+| `errors.py` | Application errors and the HTTP status of each one |
+| `gateway.py` | The only module that calls `wbdata`; client without cache |
+| `service.py` | Business rules: validation, normalization, 404 |
+| `schemas.py` | Response models (they document Swagger) |
+| `dependencies.py` | How routes receive the service (replaceable in tests) |
+| `main.py` | Application factory, error handling, OpenAPI |
+| `routers/` | Thin routes: system, catalogue, indicators, data |
+
+`api/index.py` is the Vercel entry point. `tests/` has unit tests for every
+route and every layer.
+
+## Why there is no cache
+
+`wbdata` keeps a file-based response cache. On Vercel the file system is
+read-only, except `/tmp`, and creating that file caused failures. Therefore:
+
+- `world_bank_api/__init__.py` points the library's default cache to the
+  temporary directory, before `wbdata` is imported (the import already creates a
+  default client);
+- `gateway.py` uses an `UncachedClient`, whose cache is a `NoCache` that never
+  stores anything. Every call goes to the World Bank API;
+- the tests check that the client uses `NoCache` and that no new file appears in
+  the cache directory.
+
+```mermaid
+flowchart LR
+    import["import wbdata"] --> default["default client<br/>creates a cache file"]
+    init["world_bank_api/__init__.py"] -->|"points cache to /tmp<br/>before the import"| default
+    gw["gateway.py"] --> uncached["UncachedClient<br/>cache = NoCache"]
+    uncached -->|"every request"| wb["World Bank API"]
 ```
 
-Cada camada só conhece a de baixo: as rotas chamam o serviço, o serviço chama o
-gateway, e só o gateway conhece o `wbdata`. Assim, os testes de rota usam um
-gateway falso e não fazem chamadas de rede.
+## Configuration
 
-### Por que não há cache
+There are no required environment variables. The server keeps no state.
 
-O `wbdata` mantém um cache de respostas em arquivo. No Vercel, o sistema de
-arquivos é somente leitura, exceto `/tmp`, e a criação desse arquivo causava
-falhas. Por isso:
-
-- `world_bank_api/__init__.py` aponta o cache padrão da biblioteca para o diretório
-  temporário, antes de o `wbdata` ser importado (a importação já cria um cliente
-  padrão);
-- `gateway.py` usa um `UncachedClient`, cujo cache é um `NoCache` que nunca guarda
-  nada. Todas as chamadas vão à API do Banco Mundial;
-- os testes verificam que o cliente usa `NoCache` e que nenhum arquivo novo aparece
-  no diretório de cache.
-
-## Configuração
-
-Não há variáveis de ambiente obrigatórias. O servidor não guarda estado.
-
-## Executar localmente
+## Running locally
 
 ```bash
 uv venv .venv
@@ -85,26 +121,33 @@ uv pip install --python .venv/Scripts/python.exe -r requirements.txt
 .venv\Scripts\python.exe -m uvicorn api.index:app --port 8200
 ```
 
-Depois abra `http://127.0.0.1:8200/docs`.
+Then open `http://127.0.0.1:8200/docs`.
 
-## Testes
+## Testing
 
 ```bash
 uv pip install --python .venv/Scripts/python.exe -r requirements-dev.txt
 .venv\Scripts\python.exe -m pytest -v
 ```
 
-Os testes não precisam de internet: o gateway é substituído por um falso nas rotas,
-e o cliente HTTP do `wbdata` é substituído nos testes do gateway.
+The tests need no internet access: the gateway is replaced by a fake one in the
+route tests, and the `wbdata` HTTP client is replaced in the gateway tests.
 
-## Deploy na Vercel
+## Deployment on Vercel
 
-1. Importe o repositório no Vercel (framework: *Other*).
-2. O `vercel.json` declara a função `api/index.py` (`maxDuration` 30 segundos).
-   Não há variáveis de ambiente a configurar.
-3. Cada push em `main` gera um deploy.
+```mermaid
+flowchart LR
+    import["Import the repository in Vercel<br/>framework: Other"] --> cfg["vercel.json<br/>function api/index.py, maxDuration 30 s"]
+    cfg --> env["No environment variables to set"]
+    push["Push to main"] --> deploy["New deployment"]
+```
 
-## Dados
+1. Import the repository in Vercel (framework: *Other*).
+2. `vercel.json` declares the function `api/index.py` (`maxDuration` 30
+   seconds). There are no environment variables to set.
+3. Every push to `main` creates a deployment.
 
-Os dados pertencem ao Banco Mundial e são publicados sob os termos de dados
-abertos dele. Mantenha o campo `source` das respostas ao republicar os dados.
+## Data
+
+The data belongs to the World Bank and is published under its open data terms.
+Keep the `source` field of the responses when you republish the data.
