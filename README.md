@@ -1,5 +1,7 @@
 # FinBrain World Bank Data Server
 
+![Python](https://img.shields.io/badge/Python-3-3776AB?logo=python&logoColor=white) ![FastAPI](https://img.shields.io/badge/FastAPI-0.139.2-009688?logo=fastapi&logoColor=white) ![uvicorn](https://img.shields.io/badge/uvicorn-0.51.0-499848) ![pytest](https://img.shields.io/badge/pytest-8.4.1-0A9EDC?logo=pytest&logoColor=white) ![pandas](https://img.shields.io/badge/pandas-2.3.1-150458?logo=pandas&logoColor=white) ![Pydantic](https://img.shields.io/badge/Pydantic-2.12.5-E92063?logo=pydantic&logoColor=white) ![Vercel](https://img.shields.io/badge/Vercel-deploy-000000?logo=vercel&logoColor=white) ![GitHub Actions](https://img.shields.io/badge/GitHub_Actions-CI-2088FF?logo=githubactions&logoColor=white)
+
 A stateless HTTP API over the **World Bank** open data, built with the
 [`wbdata`](https://github.com/OliverSherouse/wbdata) library and FastAPI. Every
 request is answered by the World Bank API at the moment of the call. The server
